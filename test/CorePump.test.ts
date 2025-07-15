@@ -1,5 +1,6 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+// @ts-ignore
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
 describe("CorePump Platform", function () {
