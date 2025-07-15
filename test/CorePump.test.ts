@@ -1,12 +1,14 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 // @ts-ignore
+import { upgrades } from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 
 describe("CorePump Platform", function () {
   let coinFactory: any;
   let platformTreasury: any;
   let bondingCurveImpl: any;
+  let priceOracle: any;
   let owner: SignerWithAddress;
   let creator: SignerWithAddress;
   let buyer1: SignerWithAddress;
@@ -14,14 +16,23 @@ describe("CorePump Platform", function () {
 
   const CREATION_FEE = ethers.parseEther("1"); // 1 CORE
   const BASE_PRICE = ethers.parseEther("0.0001"); // 0.0001 CORE per token
+  const INITIAL_CORE_PRICE = 100000000; // $1.00 (8 decimals)
 
   beforeEach(async function () {
     [owner, creator, buyer1, buyer2] = await ethers.getSigners();
 
-    // Deploy PlatformTreasury
+    // Deploy SimpleTestPriceOracle (non-upgradeable for testing)
+    const SimpleTestPriceOracle = await ethers.getContractFactory("SimpleTestPriceOracle");
+    priceOracle = await SimpleTestPriceOracle.deploy(INITIAL_CORE_PRICE);
+    await priceOracle.waitForDeployment();
+
+    // Deploy PlatformTreasury (upgradeable)
     const PlatformTreasury = await ethers.getContractFactory("PlatformTreasury");
-    platformTreasury = await PlatformTreasury.deploy();
-    await platformTreasury.initialize();
+    platformTreasury = await upgrades.deployProxy(PlatformTreasury, [], {
+      initializer: "initialize",
+      kind: "uups",
+    });
+    await platformTreasury.waitForDeployment();
 
     // Deploy BondingCurve implementation
     const BondingCurve = await ethers.getContractFactory("BondingCurve");
@@ -41,14 +52,22 @@ describe("CorePump Platform", function () {
       ""
     );
 
-    // Deploy CoinFactory
+    // Deploy CoinFactory (upgradeable)
     const CoinFactory = await ethers.getContractFactory("CoinFactory");
-    coinFactory = await CoinFactory.deploy();
-    await coinFactory.initialize(
-      await platformTreasury.getAddress(),
-      await coinImpl.getAddress(),
-      await bondingCurveImpl.getAddress()
+    coinFactory = await upgrades.deployProxy(
+      CoinFactory,
+      [
+        await platformTreasury.getAddress(),
+        await coinImpl.getAddress(),
+        await bondingCurveImpl.getAddress(),
+        await priceOracle.getAddress()
+      ],
+      {
+        initializer: "initialize",
+        kind: "uups",
+      }
     );
+    await coinFactory.waitForDeployment();
 
     // Authorize CoinFactory in PlatformTreasury
     await platformTreasury.authorizeContract(await coinFactory.getAddress(), true);
@@ -147,7 +166,9 @@ describe("CorePump Platform", function () {
       const finalBalance = await ethers.provider.getBalance(creator.address);
       
       // Should only pay creation fee + gas, excess should be refunded
-      expect(initialBalance - finalBalance).to.be.closeTo(CREATION_FEE + gasUsed, ethers.parseEther("0.01"));
+      const expectedCost = CREATION_FEE + gasUsed;
+      const actualCost = initialBalance - finalBalance;
+      expect(actualCost).to.be.closeTo(expectedCost, ethers.parseEther("0.01"));
     });
   });
 
@@ -195,19 +216,35 @@ describe("CorePump Platform", function () {
     });
 
     it("Should enforce 4% purchase limit", async function () {
+      // Calculate 4% of total supply (1B tokens) = 40M tokens
       const totalSupply = ethers.parseEther("1000000000"); // 1B tokens
-      const maxPurchase = totalSupply * 4n / 100n; // 4% = 40M tokens
+      const fourPercentLimit = totalSupply * 4n / 100n; // 40M tokens
       
-      // Calculate CORE needed to buy close to 4% (this is approximate)
-      const largeBuyAmount = ethers.parseEther("100");
+      // Make multiple smaller purchases to approach the 4% limit
+      const buyAmount = ethers.parseEther("1000"); // 1000 CORE per purchase
+      let totalPurchased = 0n;
       
-      // First purchase should succeed
-      await bondingCurve.connect(buyer1).buyTokens({ value: largeBuyAmount });
+      // Buy tokens in chunks until we get close to the 4% limit
+      for (let i = 0; i < 3; i++) {
+        await bondingCurve.connect(buyer1).buyTokens({ value: buyAmount });
+        totalPurchased = await bondingCurve.purchaseAmounts(buyer1.address);
+        
+        // If we're getting close to the limit, break
+        if (totalPurchased > fourPercentLimit * 8n / 10n) { // 80% of limit
+          break;
+        }
+      }
       
-      // Second large purchase should fail if it exceeds 4%
+      // Now make a large purchase that should exceed the 4% limit
+      const largeBuyAmount = ethers.parseEther("5000"); // Large amount to trigger limit
+      
       await expect(
         bondingCurve.connect(buyer1).buyTokens({ value: largeBuyAmount })
       ).to.be.revertedWith("Purchase exceeds 4% limit");
+      
+      // Verify we haven't exceeded the limit
+      const finalPurchased = await bondingCurve.purchaseAmounts(buyer1.address);
+      expect(finalPurchased).to.be.lessThan(fourPercentLimit);
     });
 
     it("Should allow selling tokens", async function () {
@@ -276,7 +313,7 @@ describe("CorePump Platform", function () {
     it("Should have correct token properties", async function () {
       expect(await coin.name()).to.equal("Test Token");
       expect(await coin.symbol()).to.equal("TEST");
-      expect(await coin.totalSupply()).to.equal(ethers.parseEther("1000000000")); // 1B tokens
+      expect(await coin.totalSupply()).to.equal(ethers.parseEther("800000000")); // 800M tokens (80% of 1B)
       expect(await coin.creator()).to.equal(creator.address);
     });
 
@@ -291,6 +328,97 @@ describe("CorePump Platform", function () {
       expect(metadata[2]).to.equal("https://example.com"); // website
       expect(metadata[3]).to.equal("https://t.me/test"); // telegram
       expect(metadata[4]).to.equal("https://twitter.com/test"); // twitter
+    });
+  });
+
+  describe("Price Oracle Integration", function () {
+    let coin: any;
+    let bondingCurve: any;
+
+    beforeEach(async function () {
+      // Create a token first
+      await coinFactory.connect(creator).createCoin(
+        "Test Token",
+        "TEST",
+        "A test token",
+        "",
+        "",
+        "",
+        "",
+        { value: CREATION_FEE }
+      );
+
+      const coinAddress = (await coinFactory.getAllCoins())[0];
+      coin = await ethers.getContractAt("Coin", coinAddress);
+      
+      const bondingCurveAddress = await coinFactory.coinToBondingCurve(coinAddress);
+      bondingCurve = await ethers.getContractAt("BondingCurve", bondingCurveAddress);
+    });
+
+    it("Should have correct initial price oracle setup", async function () {
+      const currentPrice = await priceOracle.getPrice();
+      expect(currentPrice).to.equal(INITIAL_CORE_PRICE); // $1.00
+      
+      const graduationThreshold = await bondingCurve.getGraduationThreshold();
+      // At $1.00 CORE price, graduation should need 50,000 CORE
+      expect(graduationThreshold).to.equal(ethers.parseEther("50000"));
+    });
+
+    it("Should update graduation threshold when CORE price changes", async function () {
+      // Set CORE price to $2.00
+      const newPrice = 200000000; // $2.00 (8 decimals)
+      await priceOracle.setPrice(newPrice);
+      
+      const graduationThreshold = await bondingCurve.getGraduationThreshold();
+      // At $2.00 CORE price, graduation should need 25,000 CORE
+      expect(graduationThreshold).to.equal(ethers.parseEther("25000"));
+    });
+
+    it("Should handle low CORE prices correctly", async function () {
+      // Set CORE price to $0.50
+      const newPrice = 50000000; // $0.50 (8 decimals)
+      await priceOracle.setPrice(newPrice);
+      
+      const graduationThreshold = await bondingCurve.getGraduationThreshold();
+      // At $0.50 CORE price, graduation should need 100,000 CORE
+      expect(graduationThreshold).to.equal(ethers.parseEther("100000"));
+    });
+
+    it("Should reflect price changes in bonding curve state", async function () {
+      // Initial state at $1.00 CORE
+      let state = await bondingCurve.getState();
+      let initialThreshold = (50000n * 10n**26n) / BigInt(INITIAL_CORE_PRICE);
+      
+      // Change CORE price to $0.25 (makes graduation easier in CORE terms)
+      const newPrice = 25000000; // $0.25 (8 decimals)
+      await priceOracle.setPrice(newPrice);
+      
+      // Check new graduation threshold
+      const newThreshold = await bondingCurve.getGraduationThreshold();
+      expect(newThreshold).to.equal(ethers.parseEther("200000")); // 200,000 CORE needed
+      
+      // The graduation threshold should be higher (more CORE needed) when CORE price is lower
+      expect(newThreshold).to.be.greaterThan(initialThreshold);
+    });
+
+    it("Should allow price oracle owner to update prices", async function () {
+      const initialPrice = await priceOracle.getPrice();
+      
+      // Update price
+      const newPrice = 150000000; // $1.50
+      await priceOracle.connect(owner).setPrice(newPrice);
+      
+      const updatedPrice = await priceOracle.getPrice();
+      expect(updatedPrice).to.equal(newPrice);
+      expect(updatedPrice).to.not.equal(initialPrice);
+    });
+
+    it("Should prevent non-owner from updating price oracle", async function () {
+      const newPrice = 150000000; // $1.50
+      
+      await expect(
+        priceOracle.connect(creator).setPrice(newPrice)
+      ).to.be.revertedWith("Not the owner");
     });
   });
 
@@ -334,8 +462,9 @@ describe("CorePump Platform", function () {
       const gasUsed = receipt!.gasUsed * receipt!.gasPrice;
       
       const finalOwnerBalance = await ethers.provider.getBalance(owner.address);
+      const expectedBalance = initialOwnerBalance + treasuryBalance - gasUsed;
       expect(finalOwnerBalance).to.be.closeTo(
-        initialOwnerBalance + treasuryBalance - gasUsed,
+        expectedBalance,
         ethers.parseEther("0.01")
       );
     });
