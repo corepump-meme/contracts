@@ -9,6 +9,7 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "./oracles/IPriceOracle.sol";
+import "./EventHub.sol";
 
 /**
  * @title BondingCurve
@@ -35,6 +36,7 @@ contract BondingCurve is
     address public platformTreasury;
     address public creator;
     IPriceOracle public priceOracle;
+    EventHub public eventHub;
     
     // Bonding curve state
     uint256 public totalCoreRaised;
@@ -82,13 +84,15 @@ contract BondingCurve is
      * @param platformTreasury_ The platform treasury address
      * @param basePrice_ The base price for the bonding curve
      * @param priceOracle_ The price oracle contract address
+     * @param eventHub_ The event hub contract address
      */
     function initialize(
         address coin_,
         address creator_,
         address platformTreasury_,
         uint256 basePrice_,
-        address priceOracle_
+        address priceOracle_,
+        address eventHub_
     ) public initializer {
         __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
@@ -99,6 +103,7 @@ contract BondingCurve is
         require(creator_ != address(0), "Creator cannot be zero address");
         require(platformTreasury_ != address(0), "Treasury cannot be zero address");
         require(priceOracle_ != address(0), "Price oracle cannot be zero address");
+        require(eventHub_ != address(0), "Event hub cannot be zero address");
         require(basePrice_ > 0, "Base price must be greater than 0");
         
         coin = IERC20(coin_);
@@ -106,6 +111,7 @@ contract BondingCurve is
         platformTreasury = platformTreasury_;
         basePrice = basePrice_;
         priceOracle = IPriceOracle(priceOracle_);
+        eventHub = EventHub(eventHub_);
     }
     
     /**
@@ -189,10 +195,22 @@ contract BondingCurve is
         // Check purchase limit (4% of total supply)
         uint256 totalSupply = 1_000_000_000 * 10**18;
         uint256 maxPurchase = (totalSupply * MAX_PURCHASE_PERCENTAGE) / BASIS_POINTS;
-        require(
-            purchaseAmounts[msg.sender] + tokensToReceive <= maxPurchase,
-            "Purchase exceeds 4% limit"
-        );
+        
+        // Emit LargePurchaseAttempted event if limit would be exceeded
+        if (purchaseAmounts[msg.sender] + tokensToReceive > maxPurchase) {
+            if (address(eventHub) != address(0)) {
+                eventHub.emitLargePurchaseAttempted(
+                    address(coin),
+                    msg.sender,
+                    address(this),
+                    tokensToReceive,
+                    purchaseAmounts[msg.sender],
+                    maxPurchase,
+                    block.timestamp
+                );
+            }
+            revert("Purchase exceeds 4% limit");
+        }
         
         // Update state
         purchaseAmounts[msg.sender] += tokensToReceive;
@@ -215,6 +233,21 @@ contract BondingCurve is
             getCurrentPrice(),
             fee
         );
+        
+        // Emit to EventHub
+        if (address(eventHub) != address(0)) {
+            eventHub.emitTokenTraded(
+                address(coin),
+                msg.sender,
+                address(this),
+                true, // isBuy
+                msg.value,
+                tokensToReceive,
+                getCurrentPrice(),
+                fee,
+                block.timestamp
+            );
+        }
         
         // Check for graduation using dynamic threshold
         if (totalCoreRaised >= getGraduationThreshold()) {
@@ -258,6 +291,21 @@ contract BondingCurve is
             getCurrentPrice(),
             fee
         );
+        
+        // Emit to EventHub
+        if (address(eventHub) != address(0)) {
+            eventHub.emitTokenTraded(
+                address(coin),
+                msg.sender,
+                address(this),
+                false, // isBuy
+                coreToReceive + fee, // total CORE value
+                tokenAmount,
+                getCurrentPrice(),
+                fee,
+                block.timestamp
+            );
+        }
     }
     
     /**
@@ -294,6 +342,18 @@ contract BondingCurve is
             creatorBonus,
             treasuryAmount
         );
+        
+        // Emit to EventHub
+        if (address(eventHub) != address(0)) {
+            eventHub.emitTokenGraduated(
+                address(coin),
+                creator,
+                totalCoreRaised,
+                liquidityCore,
+                creatorBonus,
+                block.timestamp
+            );
+        }
     }
     
     /**

@@ -9,6 +9,7 @@ describe("CorePump Platform", function () {
   let platformTreasury: any;
   let bondingCurveImpl: any;
   let priceOracle: any;
+  let eventHub: any;
   let owner: SignerWithAddress;
   let creator: SignerWithAddress;
   let buyer1: SignerWithAddress;
@@ -33,6 +34,14 @@ describe("CorePump Platform", function () {
       kind: "uups",
     });
     await platformTreasury.waitForDeployment();
+
+    // Deploy EventHub (upgradeable)
+    const EventHub = await ethers.getContractFactory("EventHub");
+    eventHub = await upgrades.deployProxy(EventHub, [], {
+      initializer: "initialize",
+      kind: "uups",
+    });
+    await eventHub.waitForDeployment();
 
     // Deploy BondingCurve implementation
     const BondingCurve = await ethers.getContractFactory("BondingCurve");
@@ -60,7 +69,8 @@ describe("CorePump Platform", function () {
         await platformTreasury.getAddress(),
         await coinImpl.getAddress(),
         await bondingCurveImpl.getAddress(),
-        await priceOracle.getAddress()
+        await priceOracle.getAddress(),
+        await eventHub.getAddress()
       ],
       {
         initializer: "initialize",
@@ -71,6 +81,9 @@ describe("CorePump Platform", function () {
 
     // Authorize CoinFactory in PlatformTreasury
     await platformTreasury.authorizeContract(await coinFactory.getAddress(), true);
+    
+    // Authorize CoinFactory in EventHub
+    await eventHub.authorizeContract(await coinFactory.getAddress(), true);
   });
 
   describe("Platform Setup", function () {
@@ -194,6 +207,9 @@ describe("CorePump Platform", function () {
       
       const bondingCurveAddress = await coinFactory.coinToBondingCurve(coinAddress);
       bondingCurve = await ethers.getContractAt("BondingCurve", bondingCurveAddress);
+      
+      // Authorize the bonding curve to emit events
+      await eventHub.authorizeContract(bondingCurveAddress, true);
     });
 
     it("Should allow buying tokens", async function () {

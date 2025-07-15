@@ -10,6 +10,7 @@ import "@openzeppelin/contracts/proxy/Clones.sol";
 import "./Coin.sol";
 import "./BondingCurve.sol";
 import "./oracles/IPriceOracle.sol";
+import "./EventHub.sol";
 
 /**
  * @title CoinFactory
@@ -34,6 +35,7 @@ contract CoinFactory is
     address public coinImplementation;
     address public bondingCurveImplementation;
     IPriceOracle public priceOracle;
+    EventHub public eventHub;
     
     // Tracking
     address[] public allCoins;
@@ -64,12 +66,14 @@ contract CoinFactory is
      * @param coinImplementation_ The coin implementation contract address
      * @param bondingCurveImplementation_ The bonding curve implementation contract address
      * @param priceOracle_ The price oracle contract address
+     * @param eventHub_ The event hub contract address
      */
     function initialize(
         address platformTreasury_,
         address coinImplementation_,
         address bondingCurveImplementation_,
-        address priceOracle_
+        address priceOracle_,
+        address eventHub_
     ) public initializer {
         __Ownable_init(msg.sender);
         __ReentrancyGuard_init();
@@ -80,11 +84,13 @@ contract CoinFactory is
         require(coinImplementation_ != address(0), "Coin implementation cannot be zero address");
         require(bondingCurveImplementation_ != address(0), "Bonding curve implementation cannot be zero address");
         require(priceOracle_ != address(0), "Price oracle cannot be zero address");
+        require(eventHub_ != address(0), "Event hub cannot be zero address");
         
         platformTreasury = platformTreasury_;
         coinImplementation = coinImplementation_;
         bondingCurveImplementation = bondingCurveImplementation_;
         priceOracle = IPriceOracle(priceOracle_);
+        eventHub = EventHub(eventHub_);
     }
     
     /**
@@ -133,7 +139,8 @@ contract CoinFactory is
             msg.sender, // creator
             platformTreasury,
             BASE_PRICE,
-            address(priceOracle)
+            address(priceOracle),
+            address(eventHub)
         );
         
         // Update tracking
@@ -159,6 +166,19 @@ contract CoinFactory is
             symbol,
             CREATION_FEE
         );
+        
+        // Emit to EventHub
+        if (address(eventHub) != address(0)) {
+            eventHub.emitTokenLaunched(
+                address(coin),
+                msg.sender,
+                bondingCurveProxy,
+                name,
+                symbol,
+                block.timestamp,
+                CREATION_FEE
+            );
+        }
     }
     
     /**
