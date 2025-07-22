@@ -89,12 +89,23 @@ async function main() {
   const coinImplAddress = await coinImpl.getAddress();
   console.log("Coin implementation deployed to:", coinImplAddress);
 
+  // Deploy EventHub (upgradeable)
+  console.log("\n5. Deploying EventHub...");
+  const EventHub = await ethers.getContractFactory("EventHub");
+  const eventHub = await upgrades.deployProxy(EventHub, [], {
+    initializer: "initialize",
+    kind: "uups",
+  });
+  await eventHub.waitForDeployment();
+  const eventHubAddress = await eventHub.getAddress();
+  console.log("EventHub deployed to:", eventHubAddress);
+
   // Deploy CoinFactory (upgradeable)
-  console.log("\n5. Deploying CoinFactory...");
+  console.log("\n6. Deploying CoinFactory...");
   const CoinFactory = await ethers.getContractFactory("CoinFactory");
   const coinFactory = await upgrades.deployProxy(
     CoinFactory,
-    [treasuryAddress, coinImplAddress, bondingCurveImplAddress, priceOracleAddress],
+    [treasuryAddress, coinImplAddress, bondingCurveImplAddress, priceOracleAddress, eventHubAddress],
     {
       initializer: "initialize",
       kind: "uups",
@@ -105,12 +116,17 @@ async function main() {
   console.log("CoinFactory deployed to:", factoryAddress);
 
   // Authorize CoinFactory in PlatformTreasury
-  console.log("\n6. Authorizing CoinFactory in PlatformTreasury...");
+  console.log("\n7. Authorizing CoinFactory in PlatformTreasury...");
   await platformTreasury.authorizeContract(factoryAddress, true);
   console.log("CoinFactory authorized in PlatformTreasury");
 
+  // Authorize CoinFactory in EventHub
+  console.log("\n8. Authorizing CoinFactory in EventHub...");
+  await eventHub.authorizeContract(factoryAddress, true);
+  console.log("CoinFactory authorized in EventHub");
+
   // Get platform stats
-  console.log("\n6. Getting platform stats...");
+  console.log("\n9. Getting platform stats...");
   const stats = await coinFactory.getPlatformStats();
   console.log("Platform Stats:");
   console.log("- Total Coins:", stats[0].toString());
@@ -120,6 +136,7 @@ async function main() {
 
   console.log("\n=== DEPLOYMENT SUMMARY ===");
   console.log("PlatformTreasury:", treasuryAddress);
+  console.log("EventHub:", eventHubAddress);
   console.log("BondingCurve Implementation:", bondingCurveImplAddress);
   console.log("Coin Implementation:", coinImplAddress);
   console.log("CoinFactory:", factoryAddress);
@@ -149,6 +166,7 @@ async function main() {
     contracts: {
       PriceOracle: priceOracleAddress,
       PlatformTreasury: treasuryAddress,
+      EventHub: eventHubAddress,
       BondingCurveImplementation: bondingCurveImplAddress,
       CoinImplementation: coinImplAddress,
       CoinFactory: factoryAddress,
