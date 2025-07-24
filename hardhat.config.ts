@@ -28,6 +28,22 @@ const config: HardhatUserConfig = {
     },
     // Core Chain configuration can be added here later
   },
+  defaultNetwork: "coreTestnet",
+  etherscan: {
+    apiKey: {
+      coreTestnet: process.env.CORESCAN_API_KEY || "",
+    },
+    customChains: [
+      {
+        network: "coreTestnet",
+        chainId: 1114,
+        urls: {
+          apiURL: "https://api.test2.btcs.network/api",
+          browserURL: "https://scan.test2.btcs.network",
+        },
+      },
+    ],
+  },
 };
 
 export default config;
