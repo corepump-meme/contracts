@@ -39,7 +39,8 @@ contract BondingCurve is
     EventHub public eventHub;
     
     // Bonding curve state
-    uint256 public totalCoreRaised;
+    uint256 public totalCoreRaised;       // Cumulative CORE raised (NEVER decreases)
+    uint256 public currentCoreReserves;   // Current CORE balance (can decrease on sells)
     uint256 public tokensSold;
     uint256 public basePrice; // Base price in CORE per token
     bool public graduated;
@@ -215,7 +216,8 @@ contract BondingCurve is
         // Update state
         purchaseAmounts[msg.sender] += tokensToReceive;
         tokensSold += tokensToReceive;
-        totalCoreRaised += msg.value;
+        totalCoreRaised += msg.value;        // Cumulative - never decreases
+        currentCoreReserves += msg.value;    // Current balance - can decrease
         
         // Transfer tokens to buyer
         coin.safeTransfer(msg.sender, tokensToReceive);
@@ -267,9 +269,10 @@ contract BondingCurve is
         require(coreToReceive > 0, "No CORE to receive");
         require(address(this).balance >= coreToReceive + fee, "Insufficient CORE in contract");
         
-        // Update state
+        // Update state - CRITICAL FIX: totalCoreRaised should NEVER decrease
         tokensSold -= tokenAmount;
-        totalCoreRaised -= (coreToReceive + fee);
+        currentCoreReserves -= (coreToReceive + fee);  // Only decrease reserves, not total raised
+        // totalCoreRaised remains unchanged - it's cumulative for graduation calculations
         
         // Transfer tokens from seller
         coin.safeTransferFrom(msg.sender, address(this), tokenAmount);
@@ -315,10 +318,14 @@ contract BondingCurve is
         require(!graduated, "Already graduated");
         graduated = true;
         
-        uint256 contractBalance = address(this).balance;
-        uint256 liquidityCore = (contractBalance * 70) / 100; // 70% for liquidity
-        uint256 creatorBonus = (contractBalance * 10) / 100; // 10% for creator
-        uint256 treasuryAmount = contractBalance - liquidityCore - creatorBonus; // 20% for treasury
+        // Use currentCoreReserves for liquidity calculations (actual available CORE)
+        uint256 availableCore = currentCoreReserves;
+        uint256 liquidityCore = (availableCore * 70) / 100; // 70% for liquidity
+        uint256 creatorBonus = (availableCore * 10) / 100; // 10% for creator
+        uint256 treasuryAmount = availableCore - liquidityCore - creatorBonus; // 20% for treasury
+        
+        // Update reserves after graduation distribution
+        currentCoreReserves = liquidityCore; // Keep liquidity portion in contract
         
         // Send creator bonus
         if (creatorBonus > 0) {
@@ -371,6 +378,24 @@ contract BondingCurve is
     }
     
     /**
+     * @dev Validate contract state invariants
+     * @dev This helps prevent state corruption and ensures consistency
+     */
+    function _validateState() internal view {
+        // Critical invariant: totalCoreRaised should never be less than what we've actually raised
+        require(totalCoreRaised >= currentCoreReserves, "Invalid state: totalCoreRaised < currentCoreReserves");
+        
+        // Graduated tokens should have totalCoreRaised >= threshold
+        if (graduated) {
+            uint256 threshold = getGraduationThreshold();
+            require(totalCoreRaised >= threshold, "Invalid state: graduated but below threshold");
+        }
+        
+        // Contract balance should match currentCoreReserves (accounting for pending transfers)
+        // Note: This check is relaxed during transactions due to reentrancy protection
+    }
+    
+    /**
      * @dev Required by UUPSUpgradeable
      */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -392,6 +417,30 @@ contract BondingCurve is
             tokensSold,
             graduated,
             graduationThreshold > 0 ? (totalCoreRaised * 100) / graduationThreshold : 0
+        );
+    }
+    
+    /**
+     * @dev Get detailed contract state including new reserve tracking
+     */
+    function getDetailedState() external view returns (
+        uint256 currentPrice,
+        uint256 totalRaised,
+        uint256 currentReserves,
+        uint256 tokensSoldAmount,
+        bool isGraduated,
+        uint256 graduationProgress,
+        uint256 graduationThreshold
+    ) {
+        uint256 threshold = getGraduationThreshold();
+        return (
+            getCurrentPrice(),
+            totalCoreRaised,
+            currentCoreReserves,
+            tokensSold,
+            graduated,
+            threshold > 0 ? (totalCoreRaised * 100) / threshold : 0,
+            threshold
         );
     }
 }
