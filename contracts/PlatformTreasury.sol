@@ -28,6 +28,9 @@ contract PlatformTreasury is
     // Authorized contracts
     mapping(address => bool) public authorizedContracts;
     
+    // Manager mapping for contracts that can authorize other contracts
+    mapping(address => bool) public authorizedManagers;
+    
     // Events
     event FeeReceived(
         address indexed from,
@@ -42,6 +45,13 @@ contract PlatformTreasury is
     );
     
     event ContractAuthorized(address indexed contractAddress, bool authorized);
+    event ManagerAuthorized(address indexed manager, bool authorized);
+    
+    // Modifier to restrict authorization to owner or managers
+    modifier onlyOwnerOrManager() {
+        require(owner() == msg.sender || authorizedManagers[msg.sender], "Treasury: Not authorized to manage");
+        _;
+    }
     
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -199,5 +209,52 @@ contract PlatformTreasury is
             authorizedContracts[contracts[i]] = authorizations[i];
             emit ContractAuthorized(contracts[i], authorizations[i]);
         }
+    }
+    
+    /**
+     * @dev Authorize or deauthorize a manager (only owner)
+     * @param manager The manager address to authorize/deauthorize
+     * @param authorized True to authorize, false to deauthorize
+     */
+    function authorizeManager(address manager, bool authorized) external onlyOwner {
+        require(manager != address(0), "Treasury: Invalid manager address");
+        authorizedManagers[manager] = authorized;
+        emit ManagerAuthorized(manager, authorized);
+    }
+    
+    /**
+     * @dev Authorize contract by manager or owner
+     * @param contractAddress The contract address to authorize/deauthorize
+     * @param authorized True to authorize, false to deauthorize
+     */
+    function managerAuthorizeContract(address contractAddress, bool authorized) external onlyOwnerOrManager {
+        require(contractAddress != address(0), "Treasury: Invalid contract address");
+        authorizedContracts[contractAddress] = authorized;
+        emit ContractAuthorized(contractAddress, authorized);
+    }
+    
+    /**
+     * @dev Batch authorize multiple contracts by manager or owner
+     * @param contracts Array of contract addresses
+     * @param authorizations Array of authorization statuses
+     */
+    function managerBatchAuthorizeContracts(
+        address[] memory contracts,
+        bool[] memory authorizations
+    ) external onlyOwnerOrManager {
+        require(contracts.length == authorizations.length, "Arrays length mismatch");
+        
+        for (uint256 i = 0; i < contracts.length; i++) {
+            require(contracts[i] != address(0), "Treasury: Invalid contract address");
+            authorizedContracts[contracts[i]] = authorizations[i];
+            emit ContractAuthorized(contracts[i], authorizations[i]);
+        }
+    }
+    
+    /**
+     * @dev Get contract version for upgrades
+     */
+    function version() external pure returns (string memory) {
+        return "2.0.0";
     }
 }

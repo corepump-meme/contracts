@@ -9,6 +9,7 @@ import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import "@openzeppelin/contracts/proxy/Clones.sol";
 import "./Coin.sol";
 import "./BondingCurve.sol";
+import "./PlatformTreasury.sol";
 import "./oracles/IPriceOracle.sol";
 import "./EventHub.sol";
 
@@ -142,6 +143,9 @@ contract CoinFactory is
             address(priceOracle),
             address(eventHub)
         );
+        
+        // Auto-authorize the new bonding curve in EventHub and Treasury
+        _authorizeBondingCurve(bondingCurveProxy);
         
         // Update tracking
         allCoins.push(address(coin));
@@ -317,5 +321,34 @@ contract CoinFactory is
         
         (bool success, ) = owner().call{value: balance}("");
         require(success, "Withdrawal failed");
+    }
+    
+    /**
+     * @dev Internal function to authorize a bonding curve in EventHub and Treasury
+     * @param bondingCurveProxy The bonding curve address to authorize
+     */
+    function _authorizeBondingCurve(address bondingCurveProxy) internal {
+        // Try to authorize in EventHub using manager function
+        try eventHub.managerAuthorizeContract(bondingCurveProxy, true) {
+            // Authorization successful
+        } catch {
+            // If manager authorization fails, factory might not be authorized as manager yet
+            // This is expected for existing deployments and should be handled in migration
+        }
+        
+        // Try to authorize in Treasury using manager function
+        try PlatformTreasury(payable(platformTreasury)).managerAuthorizeContract(bondingCurveProxy, true) {
+            // Authorization successful
+        } catch {
+            // If manager authorization fails, factory might not be authorized as manager yet
+            // This is expected for existing deployments and should be handled in migration
+        }
+    }
+    
+    /**
+     * @dev Get contract version for upgrades
+     */
+    function version() external pure returns (string memory) {
+        return "2.0.0";
     }
 }

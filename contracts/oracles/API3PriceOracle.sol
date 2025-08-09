@@ -5,6 +5,7 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "./IPriceOracle.sol";
+import "../EventHub.sol";
 
 /**
  * @title IApi3ReaderProxy
@@ -33,9 +34,16 @@ contract API3PriceOracle is
     uint256 public constant MIN_PRICE = 1e6; // $0.01 minimum
     uint256 public constant MAX_PRICE = 1000 * 1e8; // $1000 maximum
     
+    // EventHub integration
+    EventHub public eventHub;
+    uint256 private _lastNotifiedPrice;
+    uint256 private _lastNotifiedTimestamp;
+    
     // Events
     event PriceRead(int224 rawValue, uint32 timestamp, uint256 convertedPrice);
     event ProxyUpdated(address indexed oldProxy, address indexed newProxy);
+    event EventHubUpdated(address indexed oldEventHub, address indexed newEventHub);
+    event PriceChangeDetected(uint256 oldPrice, uint256 newPrice, uint256 timestamp);
     
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor(address _api3Proxy) {
@@ -50,6 +58,80 @@ contract API3PriceOracle is
     function initialize() public initializer {
         __Ownable_init(msg.sender);
         __UUPSUpgradeable_init();
+    }
+    
+    /**
+     * @dev Set the EventHub contract address (only owner)
+     * @param eventHub_ The EventHub contract address
+     */
+    function setEventHub(address eventHub_) external onlyOwner {
+        address oldEventHub = address(eventHub);
+        eventHub = EventHub(eventHub_);
+        emit EventHubUpdated(oldEventHub, eventHub_);
+    }
+    
+    /**
+     * @dev Check for price updates and notify EventHub
+     * This function should be called periodically by external systems or other contracts
+     * to detect price changes from the API3 feed and notify EventHub
+     */
+    function checkAndNotifyPriceUpdate() external {
+        if (address(eventHub) == address(0)) {
+            return; // No EventHub configured
+        }
+        
+        (int224 rawValue, uint32 timestamp) = api3Proxy.read();
+        
+        // Validate timestamp (price shouldn't be too old)
+        if (block.timestamp - timestamp > MAX_PRICE_AGE) {
+            return; // Price data too old, don't notify
+        }
+        
+        // Convert to uint256 and validate
+        if (rawValue <= 0) {
+            return; // Invalid price, don't notify
+        }
+        
+        uint256 currentPrice = uint256(int256(rawValue));
+        
+        // Sanity checks
+        if (currentPrice < MIN_PRICE || currentPrice > MAX_PRICE) {
+            return; // Price outside valid range, don't notify
+        }
+        
+        uint256 currentTimestamp = uint256(timestamp);
+        
+        // Only notify if price has changed or this is the first time
+        bool priceChanged = (_lastNotifiedPrice != currentPrice);
+        bool timestampChanged = (_lastNotifiedTimestamp != currentTimestamp);
+        
+        if (priceChanged && timestampChanged) {
+            uint256 oldPrice = _lastNotifiedPrice;
+            
+            // Update tracking variables
+            _lastNotifiedPrice = currentPrice;
+            _lastNotifiedTimestamp = currentTimestamp;
+            
+            // Emit local event
+            emit PriceChangeDetected(oldPrice, currentPrice, currentTimestamp);
+            
+            // Notify EventHub
+            eventHub.emitPriceOracleUpdated(
+                address(this),
+                oldPrice,
+                currentPrice,
+                currentTimestamp
+            );
+        }
+    }
+    
+    /**
+     * @dev Get the last notified price and timestamp
+     * @return lastPrice The last price that was notified to EventHub
+     * @return lastTimestamp The timestamp of the last notification
+     */
+    function getLastNotifiedPriceInfo() external view returns (uint256 lastPrice, uint256 lastTimestamp) {
+        return (_lastNotifiedPrice, _lastNotifiedTimestamp);
     }
     
     /**

@@ -5,6 +5,7 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import "./IPriceOracle.sol";
+import "../EventHub.sol";
 
 /**
  * @title TestnetPriceOracle
@@ -21,8 +22,12 @@ contract TestnetPriceOracle is
     uint256 private _price;
     uint256 private _lastUpdateTime;
     
+    // EventHub integration
+    EventHub public eventHub;
+    
     // Events
     event PriceUpdated(uint256 indexed newPrice, uint256 timestamp, address updatedBy);
+    event EventHubUpdated(address indexed oldEventHub, address indexed newEventHub);
     
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -46,6 +51,16 @@ contract TestnetPriceOracle is
     }
     
     /**
+     * @dev Set the EventHub contract address (only owner)
+     * @param eventHub_ The EventHub contract address
+     */
+    function setEventHub(address eventHub_) external onlyOwner {
+        address oldEventHub = address(eventHub);
+        eventHub = EventHub(eventHub_);
+        emit EventHubUpdated(oldEventHub, eventHub_);
+    }
+    
+    /**
      * @dev Set a new CORE price (only owner)
      * @param newPrice The new price in USD with 8 decimal places
      */
@@ -53,10 +68,21 @@ contract TestnetPriceOracle is
         require(newPrice > 0, "Price must be greater than 0");
         require(newPrice <= 1000 * 1e8, "Price too high (max $1000)"); // Sanity check
         
+        uint256 oldPrice = _price;
         _price = newPrice;
         _lastUpdateTime = block.timestamp;
         
         emit PriceUpdated(newPrice, block.timestamp, msg.sender);
+        
+        // Notify EventHub if configured and price actually changed
+        if (address(eventHub) != address(0) && oldPrice != newPrice) {
+            eventHub.emitPriceOracleUpdated(
+                address(this),
+                oldPrice,
+                newPrice,
+                block.timestamp
+            );
+        }
     }
     
     /**
@@ -101,10 +127,21 @@ contract TestnetPriceOracle is
             require(prices[i] > 0, "Price must be greater than 0");
             require(prices[i] <= 1000 * 1e8, "Price too high");
             
+            uint256 oldPrice = _price;
             _price = prices[i];
             _lastUpdateTime = block.timestamp + intervals[i];
             
             emit PriceUpdated(prices[i], _lastUpdateTime, msg.sender);
+            
+            // Notify EventHub if configured and price actually changed
+            if (address(eventHub) != address(0) && oldPrice != prices[i]) {
+                eventHub.emitPriceOracleUpdated(
+                    address(this),
+                    oldPrice,
+                    prices[i],
+                    _lastUpdateTime
+                );
+            }
         }
     }
     

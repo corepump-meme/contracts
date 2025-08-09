@@ -15,9 +15,18 @@ contract EventHub is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     // Authorization mapping for contracts that can emit events
     mapping(address => bool) public authorizedContracts;
     
+    // Manager mapping for contracts that can authorize other contracts
+    mapping(address => bool) public authorizedManagers;
+    
     // Modifier to restrict event emission to authorized contracts
     modifier onlyAuthorized() {
         require(authorizedContracts[msg.sender], "EventHub: Not authorized");
+        _;
+    }
+    
+    // Modifier to restrict authorization to owner or managers
+    modifier onlyOwnerOrManager() {
+        require(owner() == msg.sender || authorizedManagers[msg.sender], "EventHub: Not authorized to manage");
         _;
     }
     
@@ -89,6 +98,7 @@ contract EventHub is Initializable, UUPSUpgradeable, OwnableUpgradeable {
     
     // Authorization events
     event ContractAuthorized(address indexed contractAddress, bool authorized);
+    event ManagerAuthorized(address indexed manager, bool authorized);
     
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -120,6 +130,41 @@ contract EventHub is Initializable, UUPSUpgradeable, OwnableUpgradeable {
      * @param authorized Authorization status for all contracts
      */
     function batchAuthorizeContracts(address[] calldata contractAddresses, bool authorized) external onlyOwner {
+        for (uint256 i = 0; i < contractAddresses.length; i++) {
+            require(contractAddresses[i] != address(0), "EventHub: Invalid contract address");
+            authorizedContracts[contractAddresses[i]] = authorized;
+            emit ContractAuthorized(contractAddresses[i], authorized);
+        }
+    }
+    
+    /**
+     * @dev Authorize or deauthorize a manager (only owner)
+     * @param manager The manager address to authorize/deauthorize
+     * @param authorized True to authorize, false to deauthorize
+     */
+    function authorizeManager(address manager, bool authorized) external onlyOwner {
+        require(manager != address(0), "EventHub: Invalid manager address");
+        authorizedManagers[manager] = authorized;
+        emit ManagerAuthorized(manager, authorized);
+    }
+    
+    /**
+     * @dev Authorize contract by manager or owner
+     * @param contractAddress The contract address to authorize/deauthorize
+     * @param authorized True to authorize, false to deauthorize
+     */
+    function managerAuthorizeContract(address contractAddress, bool authorized) external onlyOwnerOrManager {
+        require(contractAddress != address(0), "EventHub: Invalid contract address");
+        authorizedContracts[contractAddress] = authorized;
+        emit ContractAuthorized(contractAddress, authorized);
+    }
+    
+    /**
+     * @dev Batch authorize multiple contracts by manager or owner
+     * @param contractAddresses Array of contract addresses
+     * @param authorized Authorization status for all contracts
+     */
+    function managerBatchAuthorizeContracts(address[] calldata contractAddresses, bool authorized) external onlyOwnerOrManager {
         for (uint256 i = 0; i < contractAddresses.length; i++) {
             require(contractAddresses[i] != address(0), "EventHub: Invalid contract address");
             authorizedContracts[contractAddresses[i]] = authorized;
@@ -246,6 +291,6 @@ contract EventHub is Initializable, UUPSUpgradeable, OwnableUpgradeable {
      * @dev Get contract version for upgrades
      */
     function version() external pure returns (string memory) {
-        return "1.0.0";
+        return "2.0.0";
     }
 }
