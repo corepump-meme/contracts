@@ -1,5 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+// @ts-ignore
+import { upgrades } from "hardhat";
 import { SignerWithAddress } from "@nomicfoundation/hardhat-ethers/signers";
 import { EventHub } from "../typechain-types";
 
@@ -16,17 +18,21 @@ describe("Price Oracle EventHub Integration", function () {
     beforeEach(async function () {
         [owner, user, mockApi3Proxy] = await ethers.getSigners();
 
-        // Deploy EventHub
+        // Deploy EventHub as upgradeable proxy
         const EventHub = await ethers.getContractFactory("EventHub");
-        eventHub = (await EventHub.deploy()) as EventHub;
+        eventHub = await upgrades.deployProxy(EventHub, [], {
+            initializer: "initialize",
+            kind: "uups",
+        });
         await eventHub.waitForDeployment();
-        await eventHub.initialize();
 
-        // Deploy TestnetPriceOracle
+        // Deploy TestnetPriceOracle as upgradeable proxy
         const TestnetPriceOracle = await ethers.getContractFactory("TestnetPriceOracle");
-        testnetOracle = (await TestnetPriceOracle.deploy()) as any;
+        testnetOracle = await upgrades.deployProxy(TestnetPriceOracle, [INITIAL_PRICE], {
+            initializer: "initialize",
+            kind: "uups",
+        });
         await testnetOracle.waitForDeployment();
-        await testnetOracle.initialize(INITIAL_PRICE);
 
         // Deploy MockApi3Proxy
         const MockApi3Proxy = await ethers.getContractFactory("MockApi3Proxy");
@@ -36,11 +42,14 @@ describe("Price Oracle EventHub Integration", function () {
         // Initialize with current price and timestamp
         await (mockProxy as any).updatePrice(INITIAL_PRICE, Math.floor(Date.now() / 1000));
 
-        // Deploy API3PriceOracle
+        // Deploy API3PriceOracle as upgradeable proxy
         const API3PriceOracle = await ethers.getContractFactory("API3PriceOracle");
-        api3Oracle = (await API3PriceOracle.deploy(await mockProxy.getAddress())) as any;
+        api3Oracle = await upgrades.deployProxy(API3PriceOracle, [], {
+            initializer: "initialize",
+            kind: "uups",
+            constructorArgs: [await mockProxy.getAddress()]
+        });
         await api3Oracle.waitForDeployment();
-        await api3Oracle.initialize();
     });
 
     describe("TestnetPriceOracle Integration", function () {
@@ -149,7 +158,8 @@ describe("Price Oracle EventHub Integration", function () {
             const mockProxy = MockApi3Proxy.attach(await api3Oracle.getProxyAddress());
             
             const newPrice = ethers.parseUnits("2.50", 8);
-            const newTimestamp = Math.floor(Date.now() / 1000) + 100;
+            const latestBlock = await ethers.provider.getBlock("latest");
+            const newTimestamp = latestBlock!.timestamp; // Use current timestamp
             await (mockProxy as any).updatePrice(newPrice, newTimestamp);
 
             // Check for price change - should emit events

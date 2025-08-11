@@ -28,7 +28,6 @@ const config: HardhatUserConfig = {
     },
     // Core Chain configuration can be added here later
   },
-  defaultNetwork: "coreTestnet",
   etherscan: {
     apiKey: {
       coreTestnet: process.env.CORESCAN_API_KEY || "",

@@ -19,6 +19,7 @@ interface IApi3ReaderProxy {
  * @title API3PriceOracle
  * @dev Price oracle that reads CORE/USD price from API3's data feed
  * Used for mainnet deployment with real price data
+ * @custom:oz-upgrades-unsafe-allow state-variable-immutable
  */
 contract API3PriceOracle is 
     Initializable,
@@ -27,6 +28,7 @@ contract API3PriceOracle is
     IPriceOracle 
 {
     // API3 proxy contract
+    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
     IApi3ReaderProxy public immutable api3Proxy;
     
     // Price validation
@@ -83,8 +85,8 @@ contract API3PriceOracle is
         (int224 rawValue, uint32 timestamp) = api3Proxy.read();
         
         // Validate timestamp (price shouldn't be too old)
-        if (block.timestamp - timestamp > MAX_PRICE_AGE) {
-            return; // Price data too old, don't notify
+        if (timestamp > block.timestamp || block.timestamp - timestamp > MAX_PRICE_AGE) {
+            return; // Price data too old or in the future, don't notify
         }
         
         // Convert to uint256 and validate
@@ -143,7 +145,7 @@ contract API3PriceOracle is
         
         // Validate timestamp (price shouldn't be too old)
         require(
-            block.timestamp - timestamp <= MAX_PRICE_AGE,
+            timestamp <= block.timestamp && block.timestamp - timestamp <= MAX_PRICE_AGE,
             "Price data too old"
         );
         
@@ -193,7 +195,7 @@ contract API3PriceOracle is
      */
     function isPriceFresh() external view returns (bool fresh) {
         (, uint32 timestamp) = api3Proxy.read();
-        return (block.timestamp - timestamp) <= MAX_PRICE_AGE;
+        return timestamp <= block.timestamp && (block.timestamp - timestamp) <= MAX_PRICE_AGE;
     }
     
     /**

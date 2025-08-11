@@ -30,7 +30,7 @@ describe("EventHub", function () {
   describe("Deployment", function () {
     it("Should deploy correctly", async function () {
       expect(await eventHub.owner()).to.equal(owner.address);
-      expect(await eventHub.version()).to.equal("1.0.0");
+      expect(await eventHub.version()).to.equal("2.0.0");
     });
 
     it("Should initialize with no authorized contracts except the one we added", async function () {
