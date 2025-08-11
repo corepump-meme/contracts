@@ -1,4 +1,4 @@
-### **Project Rulebook: The "Stable Launch" Protocol V6**
+### **Project Rulebook: The "Stable Launch" Protocol V2**
 
 **Preamble:** This document outlines the immutable business rules governing the CorePump.meme platform. These rules are designed to maximize fairness, security, and long-term sustainability for all participants. All rules are to be enforced programmatically by the platform's smart contracts wherever technically feasible.
 
