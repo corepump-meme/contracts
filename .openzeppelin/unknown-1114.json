@@ -1071,7 +1071,7 @@
             "label": "priceOracle",
             "offset": 0,
             "slot": "3",
-            "type": "t_contract(IPriceOracle)7471",
+            "type": "t_contract(IPriceOracle)7373",
             "contract": "CoinFactory",
             "src": "contracts/CoinFactory.sol:38"
           },
@@ -1079,7 +1079,7 @@
             "label": "eventHub",
             "offset": 0,
             "slot": "4",
-            "type": "t_contract(EventHub)6338",
+            "type": "t_contract(EventHub)6733",
             "contract": "CoinFactory",
             "src": "contracts/CoinFactory.sol:39"
           },
@@ -1183,11 +1183,11 @@
             "label": "address[]",
             "numberOfBytes": "32"
           },
-          "t_contract(EventHub)6338": {
+          "t_contract(EventHub)6733": {
             "label": "contract EventHub",
             "numberOfBytes": "20"
           },
-          "t_contract(IPriceOracle)7471": {
+          "t_contract(IPriceOracle)7373": {
             "label": "contract IPriceOracle",
             "numberOfBytes": "20"
           },

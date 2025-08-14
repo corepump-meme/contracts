@@ -10,7 +10,6 @@ import "@openzeppelin/contracts/proxy/Clones.sol";
 import "./Coin.sol";
 import "./BondingCurve.sol";
 import "./PlatformTreasury.sol";
-import "./oracles/IPriceOracle.sol";
 import "./EventHub.sol";
 
 /**
@@ -35,7 +34,7 @@ contract CoinFactory is
     address public platformTreasury;
     address public coinImplementation;
     address public bondingCurveImplementation;
-    IPriceOracle public priceOracle;
+    address public priceOracle; // Kept for storage compatibility, no longer used
     EventHub public eventHub;
     
     // Tracking
@@ -90,7 +89,7 @@ contract CoinFactory is
         platformTreasury = platformTreasury_;
         coinImplementation = coinImplementation_;
         bondingCurveImplementation = bondingCurveImplementation_;
-        priceOracle = IPriceOracle(priceOracle_);
+        priceOracle = priceOracle_; // Just store address for compatibility
         eventHub = EventHub(eventHub_);
     }
     

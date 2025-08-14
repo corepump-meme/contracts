@@ -1,4 +1,4 @@
-# CorePump Integration Guide
+# CorePump Integration Guide v2.2.0
 
 A comprehensive guide for integrating with the CorePump token launchpad platform on Core Chain.
 
@@ -8,30 +8,34 @@ A comprehensive guide for integrating with the CorePump token launchpad platform
 2. [Architecture & Contracts](#architecture--contracts)
 3. [EventHub Integration](#eventhub-integration)
 4. [Frontend Integration](#frontend-integration)
-5. [Subgraph Integration](#subgraph-integration)
-6. [Third-Party Integration](#third-party-integration)
-7. [Security & Best Practices](#security--best-practices)
-8. [Code Examples](#code-examples)
-9. [Testing & Deployment](#testing--deployment)
-10. [Troubleshooting](#troubleshooting)
+5. [Market Cap Calculations](#market-cap-calculations)
+6. [Subgraph Integration](#subgraph-integration)
+7. [Third-Party Integration](#third-party-integration)
+8. [Security & Best Practices](#security--best-practices)
+9. [Code Examples](#code-examples)
+10. [Testing & Deployment](#testing--deployment)
+11. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## 🎯 Project Overview
 
-CorePump is a decentralized token launchpad built on Core Chain featuring:
+CorePump v2.2.0 is a decentralized token launchpad built on Core Chain featuring:
 
+- **Enhanced Security**: Fixed graduation threshold eliminates oracle manipulation
+- **Superior Creator Incentives**: 30% creator bonus (3x improvement from 10%)
 - **Fair Token Launches**: 4% purchase limits and bonding curve price discovery
-- **Anti-Rug Protection**: Immediate ownership renouncement and LP token burning
+- **Anti-Rug Protection**: Immediate ownership renouncement and real liquidity provision
 - **Centralized Events**: EventHub system for unified analytics and monitoring
 - **Upgradeable Architecture**: UUPS proxy pattern for future enhancements
-- **Production Ready**: 54 passing tests with comprehensive security measures
+- **Production Ready**: Comprehensive test coverage with all vulnerabilities eliminated
 
-### Key Business Rules
+### Key Business Rules (v2.2.0)
 - **1 CORE creation fee** per token launch
 - **1,000,000,000 fixed supply** for every token
 - **1% platform fee** on all bonding curve trades
-- **$50,000 graduation threshold** to DEX
+- **116,589 CORE fixed graduation threshold** (manipulation-proof)
+- **Enhanced distribution**: 50% liquidity, 30% creator, 20% treasury
 - **Immutable tokens** with renounced ownership
 
 ---
@@ -77,15 +81,36 @@ CorePump is a decentralized token launchpad built on Core Chain featuring:
   - `emitTokenGraduated()` - Graduation events
 - **Events**: 7 comprehensive event types (see EventHub section)
 
-### Contract Addresses
+### Contract Addresses (CoreTestnet v2.2.0)
 
 ```typescript
-// Example deployment addresses (update with actual addresses)
+// CoreTestnet v2.2.0 deployment addresses
 const CONTRACTS = {
+  CoinFactory: "0x7766a44216a23B8BeE5A264aa4f8C4E6aaC00c68",
+  EventHub: "0xd27C6810c589974975cC390eC1A1959862E8a85E",
+  PlatformTreasury: "0x17Bc6954438a8D5F1B43c9DC5e6B6C1C4D060020",
+  BondingCurveImplementation: "0x8ab87E94acFb9B4B574C1CCD1C850504Be055c40",
+  // Individual BondingCurve addresses are created dynamically per token
+};
+
+// Mainnet addresses (to be updated when deployed)
+const MAINNET_CONTRACTS = {
   CoinFactory: "0x...",
   EventHub: "0x...",
   PlatformTreasury: "0x...",
-  // BondingCurve addresses are created dynamically per token
+  BondingCurveImplementation: "0x...",
+};
+
+// Network configuration helper
+export const getContractAddresses = (chainId: number) => {
+  switch (chainId) {
+    case 1114: // Core Testnet
+      return CONTRACTS;
+    case 1116: // Core Mainnet
+      return MAINNET_CONTRACTS;
+    default:
+      throw new Error(`Unsupported chain ID: ${chainId}`);
+  }
 };
 ```
 
@@ -343,6 +368,750 @@ export const useEventHub = () => {
 
   return { events };
 };
+```
+
+---
+
+## 📊 Market Cap Calculations
+
+### **Understanding CorePump Market Cap**
+
+Market capitalization for bonding curve tokens requires special calculations since the price changes dynamically and not all tokens are in circulation.
+
+#### **Key Concepts**
+
+- **Total Supply**: Always 1,000,000,000 tokens (1B)
+- **Circulating Supply**: Tokens sold from bonding curve (variable)
+- **Current Price**: Latest price from bonding curve
+- **Market Cap**: Circulating Supply × Current Price (in CORE)
+
+#### **Market Cap Formula**
+
+```typescript
+// Basic market cap calculation
+const marketCap = circulatingSupply * currentPrice;
+
+// For CorePump specifically:
+// marketCap = tokensSold * getCurrentPrice()
+```
+
+### **Frontend Market Cap Integration**
+
+#### **Real-time Market Cap Hook**
+
+```typescript
+// useMarketCap.ts
+import { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
+import { BondingCurve__factory } from './typechain';
+
+export interface MarketCapData {
+  marketCap: string;
+  circulatingSupply: string;
+  currentPrice: string;
+  graduationProgress: number;
+  loading: boolean;
+  error?: string;
+}
+
+export const useMarketCap = (bondingCurveAddress: string): MarketCapData => {
+  const [data, setData] = useState<MarketCapData>({
+    marketCap: '0',
+    circulatingSupply: '0',
+    currentPrice: '0',
+    graduationProgress: 0,
+    loading: true
+  });
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+
+    const fetchMarketCapData = async () => {
+      try {
+        setData(prev => ({ ...prev, loading: true, error: undefined }));
+
+        const provider = new ethers.providers.Web3Provider(window.ethereum);
+        const bondingCurve = BondingCurve__factory.connect(bondingCurveAddress, provider);
+
+        // Get bonding curve state
+        const state = await bondingCurve.getDetailedState();
+        const [currentPrice, totalCoreRaised, currentCoreReserves, tokensSold, isGraduated, graduationProgress] = state;
+
+        // Calculate market cap
+        const circulatingSupply = tokensSold;
+        const marketCap = circulatingSupply.mul(currentPrice).div(ethers.utils.parseEther('1'));
+
+        // Get graduation threshold for progress calculation
+        const graduationThreshold = await bondingCurve.getGraduationThreshold();
+        const progress = graduationThreshold.gt(0) 
+          ? Math.min(100, Number(totalCoreRaised.mul(100).div(graduationThreshold)))
+          : 0;
+
+        setData({
+          marketCap: ethers.utils.formatEther(marketCap),
+          circulatingSupply: ethers.utils.formatEther(circulatingSupply),
+          currentPrice: ethers.utils.formatEther(currentPrice),
+          graduationProgress: progress,
+          loading: false
+        });
+
+      } catch (error: any) {
+        setData(prev => ({
+          ...prev,
+          loading: false,
+          error: error.message
+        }));
+      }
+    };
+
+    // Initial fetch
+    fetchMarketCapData();
+
+    // Update every 10 seconds
+    interval = setInterval(fetchMarketCapData, 10000);
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [bondingCurveAddress]);
+
+  return data;
+};
+```
+
+#### **Market Cap Display Component**
+
+```tsx
+// MarketCapCard.tsx
+import React from 'react';
+import { useMarketCap } from '../hooks/useMarketCap';
+import { formatCurrency, formatNumber } from '../utils/formatters';
+
+interface MarketCapCardProps {
+  bondingCurveAddress: string;
+  tokenSymbol: string;
+}
+
+const MarketCapCard: React.FC<MarketCapCardProps> = ({ 
+  bondingCurveAddress, 
+  tokenSymbol 
+}) => {
+  const { 
+    marketCap, 
+    circulatingSupply, 
+    currentPrice, 
+    graduationProgress, 
+    loading, 
+    error 
+  } = useMarketCap(bondingCurveAddress);
+
+  if (loading) {
+    return <div className="market-cap-card loading">Loading market data...</div>;
+  }
+
+  if (error) {
+    return <div className="market-cap-card error">Error: {error}</div>;
+  }
+
+  return (
+    <div className="market-cap-card">
+      <h3>Market Statistics</h3>
+      
+      <div className="metric-row">
+        <span className="metric-label">Market Cap</span>
+        <span className="metric-value">
+          {formatCurrency(marketCap)} CORE
+        </span>
+      </div>
+
+      <div className="metric-row">
+        <span className="metric-label">Price</span>
+        <span className="metric-value">
+          {formatCurrency(currentPrice)} CORE
+        </span>
+      </div>
+
+      <div className="metric-row">
+        <span className="metric-label">Circulating Supply</span>
+        <span className="metric-value">
+          {formatNumber(circulatingSupply)} {tokenSymbol}
+        </span>
+      </div>
+
+      <div className="metric-row">
+        <span className="metric-label">Graduation Progress</span>
+        <span className="metric-value">
+          {graduationProgress.toFixed(1)}%
+        </span>
+      </div>
+
+      <div className="progress-bar">
+        <div 
+          className="progress-fill" 
+          style={{ width: `${graduationProgress}%` }}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default MarketCapCard;
+```
+
+#### **Market Cap Calculations Utility**
+
+```typescript
+// marketCapUtils.ts
+import { ethers } from 'ethers';
+
+export interface TokenMetrics {
+  marketCap: string;
+  fullyDilutedMarketCap: string;
+  circulatingSupply: string;
+  totalSupply: string;
+  currentPrice: string;
+  priceChange24h?: number;
+  volumeChange24h?: number;
+}
+
+export class MarketCapCalculator {
+  private static readonly TOTAL_SUPPLY = ethers.utils.parseEther('1000000000'); // 1B tokens
+  private static readonly GRADUATION_THRESHOLD = ethers.utils.parseEther('116589'); // Fixed threshold
+
+  /**
+   * Calculate comprehensive token metrics
+   */
+  static calculateMetrics(
+    tokensSold: ethers.BigNumber,
+    currentPrice: ethers.BigNumber,
+    totalCoreRaised?: ethers.BigNumber
+  ): TokenMetrics {
+    // Current market cap (circulating supply only)
+    const marketCap = tokensSold.mul(currentPrice).div(ethers.utils.parseEther('1'));
+    
+    // Fully diluted market cap (all tokens at current price)
+    const fullyDilutedMarketCap = this.TOTAL_SUPPLY.mul(currentPrice).div(ethers.utils.parseEther('1'));
+
+    return {
+      marketCap: ethers.utils.formatEther(marketCap),
+      fullyDilutedMarketCap: ethers.utils.formatEther(fullyDilutedMarketCap),
+      circulatingSupply: ethers.utils.formatEther(tokensSold),
+      totalSupply: ethers.utils.formatEther(this.TOTAL_SUPPLY),
+      currentPrice: ethers.utils.formatEther(currentPrice)
+    };
+  }
+
+  /**
+   * Calculate graduation progress
+   */
+  static calculateGraduationProgress(totalCoreRaised: ethers.BigNumber): number {
+    if (totalCoreRaised.gte(this.GRADUATION_THRESHOLD)) {
+      return 100;
+    }
+    
+    return Number(totalCoreRaised.mul(10000).div(this.GRADUATION_THRESHOLD)) / 100;
+  }
+
+  /**
+   * Estimate market cap at graduation
+   */
+  static estimateGraduationMarketCap(currentPrice: ethers.BigNumber): string {
+    // Estimate tokens that will be sold at graduation
+    // This is an approximation since price increases with each purchase
+    const estimatedTokensAtGraduation = this.GRADUATION_THRESHOLD.mul(ethers.utils.parseEther('1')).div(currentPrice);
+    const estimatedMarketCap = estimatedTokensAtGraduation.mul(currentPrice).div(ethers.utils.parseEther('1'));
+    
+    return ethers.utils.formatEther(estimatedMarketCap);
+  }
+
+  /**
+   * Calculate market cap in USD
+   */
+  static calculateMarketCapUSD(marketCapCORE: string, coreUSDPrice: number): string {
+    const marketCapInCORE = parseFloat(marketCapCORE);
+    const marketCapInUSD = marketCapInCORE * coreUSDPrice;
+    
+    return marketCapInUSD.toLocaleString('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0
+    });
+  }
+
+  /**
+   * Get market cap category
+   */
+  static getMarketCapCategory(marketCapCORE: string): string {
+    const marketCap = parseFloat(marketCapCORE);
+    
+    if (marketCap < 1000) return 'Micro Cap';
+    if (marketCap < 10000) return 'Small Cap';
+    if (marketCap < 100000) return 'Mid Cap';
+    return 'Large Cap';
+  }
+}
+```
+
+#### **Real-time Market Cap Updates**
+
+```typescript
+// useRealtimeMarketCap.ts - Using EventHub for real-time updates
+import { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
+import { EventHub__factory } from './typechain';
+
+export const useRealtimeMarketCap = (tokenAddress: string, eventHubAddress: string) => {
+  const [marketCapData, setMarketCapData] = useState({
+    marketCap: '0',
+    currentPrice: '0',
+    volume24h: '0',
+    priceChange24h: 0
+  });
+
+  useEffect(() => {
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+    const eventHub = EventHub__factory.connect(eventHubAddress, provider);
+
+    // Listen for trading events for this specific token
+    const tokenTradedFilter = eventHub.filters.TokenTraded(tokenAddress);
+    
+    const handleTokenTraded = (
+      token: string,
+      trader: string, 
+      bondingCurve: string,
+      isBuy: boolean,
+      coreAmount: ethers.BigNumber,
+      tokenAmount: ethers.BigNumber,
+      newPrice: ethers.BigNumber,
+      fee: ethers.BigNumber,
+      timestamp: ethers.BigNumber
+    ) => {
+      // Update market cap data when trades occur
+      setMarketCapData(prev => ({
+        ...prev,
+        currentPrice: ethers.utils.formatEther(newPrice),
+        // Additional calculations for volume and price changes would go here
+      }));
+    };
+
+    eventHub.on(tokenTradedFilter, handleTokenTraded);
+
+    // Cleanup listener on unmount
+    return () => {
+      eventHub.off(tokenTradedFilter, handleTokenTraded);
+    };
+  }, [tokenAddress, eventHubAddress]);
+
+  return marketCapData;
+};
+```
+
+### **Subgraph Market Cap Integration**
+
+#### **Enhanced Schema with Market Cap Fields**
+
+```graphql
+# Enhanced schema.graphql with market cap calculations
+type Token @entity {
+  id: ID!
+  address: Bytes!
+  name: String!
+  symbol: String!
+  creator: User!
+  bondingCurve: Bytes!
+  createdAt: BigInt!
+  creationFee: BigDecimal!
+  
+  # Trading data
+  totalVolume: BigDecimal!
+  totalTrades: BigInt!
+  currentPrice: BigDecimal!
+  tokensSold: BigDecimal!
+  
+  # Market cap calculations
+  marketCap: BigDecimal!
+  fullyDilutedMarketCap: BigDecimal!
+  circulatingSupply: BigDecimal!
+  totalSupply: BigDecimal!
+  
+  # Graduation tracking
+  graduationProgress: BigDecimal!
+  isGraduated: Boolean!
+  graduatedAt: BigInt
+  
+  # Historical data
+  priceChange24h: BigDecimal
+  volumeChange24h: BigDecimal
+  marketCapChange24h: BigDecimal
+  
+  # Relations
+  trades: [Trade!]! @derivedFrom(field: "token")
+  hourlyData: [TokenHourlyData!]! @derivedFrom(field: "token")
+}
+
+type TokenHourlyData @entity {
+  id: ID!
+  token: Token!
+  hourStartUnix: Int!
+  
+  # Hourly metrics for calculating changes
+  price: BigDecimal!
+  marketCap: BigDecimal!
+  volume: BigDecimal!
+  trades: BigInt!
+}
+
+type Trade @entity {
+  id: ID!
+  token: Token!
+  trader: User!
+  isBuy: Boolean!
+  coreAmount: BigDecimal!
+  tokenAmount: BigDecimal!
+  price: BigDecimal!
+  fee: BigDecimal!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+  
+  # Market impact
+  marketCapBefore: BigDecimal!
+  marketCapAfter: BigDecimal!
+  priceImpact: BigDecimal!
+}
+```
+
+#### **Enhanced Mapping Functions with Market Cap**
+
+```typescript
+// Enhanced src/mapping.ts with market cap calculations
+import { BigDecimal, BigInt } from '@graphprotocol/graph-ts';
+
+const TOTAL_SUPPLY = BigDecimal.fromString('1000000000'); // 1B tokens
+const GRADUATION_THRESHOLD = BigDecimal.fromString('116589'); // Fixed threshold
+
+export function handleTokenTraded(event: TokenTraded): void {
+  let token = Token.load(event.params.token.toHex());
+  if (!token) return;
+
+  // Calculate market cap before trade
+  let marketCapBefore = token.tokensSold.times(token.currentPrice);
+
+  // Create trade entity
+  let tradeId = event.transaction.hash.toHex() + '-' + event.logIndex.toString();
+  let trade = new Trade(tradeId);
+  trade.token = token.id;
+  trade.trader = event.params.trader.toHex();
+  trade.isBuy = event.params.isBuy;
+  trade.coreAmount = event.params.coreAmount.toBigDecimal();
+  trade.tokenAmount = event.params.tokenAmount.toBigDecimal();
+  trade.price = event.params.newPrice.toBigDecimal();
+  trade.fee = event.params.fee.toBigDecimal();
+  trade.timestamp = event.params.timestamp;
+  trade.blockNumber = event.block.number;
+  trade.transactionHash = event.transaction.hash;
+
+  // Update token stats
+  token.totalVolume = token.totalVolume.plus(trade.coreAmount);
+  token.totalTrades = token.totalTrades.plus(BigInt.fromI32(1));
+  token.currentPrice = trade.price;
+
+  // Update tokens sold (add for buys, subtract for sells)
+  if (trade.isBuy) {
+    token.tokensSold = token.tokensSold.plus(trade.tokenAmount);
+  } else {
+    token.tokensSold = token.tokensSold.minus(trade.tokenAmount);
+  }
+
+  // Calculate new market cap
+  let marketCapAfter = token.tokensSold.times(token.currentPrice);
+  token.marketCap = marketCapAfter;
+
+  // Calculate fully diluted market cap
+  token.fullyDilutedMarketCap = TOTAL_SUPPLY.times(token.currentPrice);
+
+  // Update circulating supply
+  token.circulatingSupply = token.tokensSold;
+  token.totalSupply = TOTAL_SUPPLY;
+
+  // Calculate graduation progress
+  let totalRaised = getTotalCoreRaised(token.id); // Helper function to get total raised
+  token.graduationProgress = totalRaised.div(GRADUATION_THRESHOLD).times(BigDecimal.fromString('100'));
+
+  // Add market impact data to trade
+  trade.marketCapBefore = marketCapBefore;
+  trade.marketCapAfter = marketCapAfter;
+  trade.priceImpact = calculatePriceImpact(marketCapBefore, marketCapAfter);
+
+  // Update hourly data for 24h calculations
+  updateTokenHourlyData(token, event.block.timestamp);
+
+  // Calculate 24h changes
+  update24hChanges(token, event.block.timestamp);
+
+  token.save();
+  trade.save();
+}
+
+function calculatePriceImpact(marketCapBefore: BigDecimal, marketCapAfter: BigDecimal): BigDecimal {
+  if (marketCapBefore.equals(BigDecimal.fromString('0'))) {
+    return BigDecimal.fromString('0');
+  }
+  
+  return marketCapAfter.minus(marketCapBefore).div(marketCapBefore).times(BigDecimal.fromString('100'));
+}
+
+function updateTokenHourlyData(token: Token, timestamp: BigInt): void {
+  let hourIndex = timestamp.toI32() / 3600; // Get hour index
+  let hourStartUnix = hourIndex * 3600;
+  let hourlyDataId = token.id + '-' + hourIndex.toString();
+
+  let hourlyData = TokenHourlyData.load(hourlyDataId);
+  if (!hourlyData) {
+    hourlyData = new TokenHourlyData(hourlyDataId);
+    hourlyData.token = token.id;
+    hourlyData.hourStartUnix = hourStartUnix;
+    hourlyData.trades = BigInt.fromI32(0);
+    hourlyData.volume = BigDecimal.fromString('0');
+  }
+
+  hourlyData.price = token.currentPrice;
+  hourlyData.marketCap = token.marketCap;
+  hourlyData.volume = hourlyData.volume.plus(token.totalVolume);
+  hourlyData.trades = hourlyData.trades.plus(BigInt.fromI32(1));
+
+  hourlyData.save();
+}
+
+function update24hChanges(token: Token, timestamp: BigInt): void {
+  let dayId = timestamp.toI32() / 86400;
+  let dayStartTimestamp = dayId * 86400;
+  let yesterday = dayStartTimestamp - 86400;
+
+  // Get data from 24 hours ago
+  let yesterdayHourIndex = yesterday / 3600;
+  let yesterdayDataId = token.id + '-' + yesterdayHourIndex.toString();
+  let yesterdayData = TokenHourlyData.load(yesterdayDataId);
+
+  if (yesterdayData) {
+    // Calculate 24h price change
+    let priceChange = token.currentPrice.minus(yesterdayData.price);
+    token.priceChange24h = priceChange.div(yesterdayData.price).times(BigDecimal.fromString('100'));
+
+    // Calculate 24h market cap change
+    let marketCapChange = token.marketCap.minus(yesterdayData.marketCap);
+    token.marketCapChange24h = marketCapChange.div(yesterdayData.marketCap).times(BigDecimal.fromString('100'));
+
+    // Calculate 24h volume change
+    let volumeChange = token.totalVolume.minus(yesterdayData.volume);
+    token.volumeChange24h = volumeChange.div(yesterdayData.volume).times(BigDecimal.fromString('100'));
+  }
+}
+```
+
+#### **Market Cap GraphQL Queries**
+
+```graphql
+# Get tokens with market cap data
+query GetTokensWithMarketCap($first: Int!, $orderBy: String = "marketCap", $orderDirection: String = "desc") {
+  tokens(
+    first: $first
+    orderBy: $orderBy
+    orderDirection: $orderDirection
+    where: { isGraduated: false }
+  ) {
+    id
+    name
+    symbol
+    currentPrice
+    marketCap
+    fullyDilutedMarketCap
+    circulatingSupply
+    graduationProgress
+    priceChange24h
+    marketCapChange24h
+    volumeChange24h
+    totalVolume
+    creator {
+      address
+    }
+  }
+}
+
+# Get market cap leaderboard
+query GetMarketCapLeaderboard($first: Int = 10) {
+  tokens(
+    first: $first
+    orderBy: marketCap
+    orderDirection: desc
+    where: { marketCap_gt: "0" }
+  ) {
+    id
+    name
+    symbol
+    marketCap
+    currentPrice
+    priceChange24h
+    circulatingSupply
+    graduationProgress
+  }
+}
+
+# Get token with detailed market metrics
+query GetTokenMarketData($id: ID!) {
+  token(id: $id) {
+    id
+    name
+    symbol
+    currentPrice
+    marketCap
+    fullyDilutedMarketCap
+    circulatingSupply
+    totalSupply
+    graduationProgress
+    priceChange24h
+    marketCapChange24h
+    volumeChange24h
+    totalVolume
+    totalTrades
+    isGraduated
+    
+    # Recent trades for price history
+    trades(first: 50, orderBy: timestamp, orderDirection: desc) {
+      price
+      marketCapAfter
+      timestamp
+      isBuy
+      coreAmount
+      tokenAmount
+      priceImpact
+    }
+    
+    # Hourly data for charts
+    hourlyData(first: 24, orderBy: hourStartUnix, orderDirection: desc) {
+      hourStartUnix
+      price
+      marketCap
+      volume
+    }
+  }
+}
+
+# Get market overview statistics
+query GetMarketOverview {
+  tokens(where: { isGraduated: false }) {
+    marketCap
+    currentPrice
+  }
+  
+  platform(id: "platform") {
+    totalTokens
+    totalVolume
+  }
+}
+```
+
+### **Market Cap API Integration**
+
+```typescript
+// marketCapAPI.ts - Server-side market cap API
+import express from 'express';
+import { GraphQLClient } from 'graphql-request';
+
+const app = express();
+const graphqlClient = new GraphQLClient('https://api.thegraph.com/subgraphs/name/your-subgraph');
+
+// Get market cap rankings
+app.get('/api/market-cap/rankings', async (req, res) => {
+  const { limit = 50, offset = 0 } = req.query;
+  
+  const query = `
+    query GetMarketCapRankings($first: Int!, $skip: Int!) {
+      tokens(
+        first: $first
+        skip: $skip
+        orderBy: marketCap
+        orderDirection: desc
+        where: { marketCap_gt: "0" }
+      ) {
+        id
+        name
+        symbol
+        address
+        marketCap
+        currentPrice
+        circulatingSupply
+        priceChange24h
+        marketCapChange24h
+        graduationProgress
+        creator { address }
+      }
+    }
+  `;
+
+  try {
+    const data = await graphqlClient.request(query, { 
+      first: parseInt(limit as string), 
+      skip: parseInt(offset as string) 
+    });
+    
+    // Add rankings and format data
+    const rankings = data.tokens.map((token: any, index: number) => ({
+      rank: parseInt(offset as string) + index + 1,
+      ...token,
+      marketCapFormatted: formatCurrency(token.marketCap),
+      priceFormatted: formatCurrency(token.currentPrice)
+    }));
+
+    res.json({ rankings, total: rankings.length });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get market statistics
+app.get('/api/market-cap/stats', async (req, res) => {
+  const query = `
+    query GetMarketStats {
+      tokens(where: { isGraduated: false, marketCap_gt: "0" }) {
+        marketCap
+        currentPrice
+        priceChange24h
+        marketCapChange24h
+      }
+    }
+  `;
+
+  try {
+    const data = await graphqlClient.request(query);
+    
+    const totalMarketCap = data.tokens.reduce((sum: number, token: any) => 
+      sum + parseFloat(token.marketCap), 0);
+    
+    const averagePrice = data.tokens.reduce((sum: number, token: any) => 
+      sum + parseFloat(token.currentPrice), 0) / data.tokens.length;
+
+    const avgPriceChange24h = data.tokens.reduce((sum: number, token: any) => 
+      sum + parseFloat(token.priceChange24h || '0'), 0) / data.tokens.length;
+
+    res.json({
+      totalMarketCap: totalMarketCap.toFixed(2),
+      averageTokenPrice: averagePrice.toFixed(6),
+      activeTokens: data.tokens.length,
+      avgPriceChange24h: avgPriceChange24h.toFixed(2)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Market cap utilities
+function formatCurrency(value: string): string {
+  const num = parseFloat(value);
+  if (num >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
+  if (num >= 1e3) return `${(num / 1e3).toFixed(2)}K`;
+  return num.toFixed(4);
+}
 ```
 
 ---
